@@ -13,7 +13,6 @@ class ReplayBuffer:
     the DQN. Supports uniform random sampling for training.
 
     Parameters
-    ----------
     capacity : int
         Maximum number of experiences. Oldest entry is overwritten when full.
     """
@@ -27,7 +26,6 @@ class ReplayBuffer:
         Add one experience tuple to the buffer.
 
         Parameters
-        ----------
         state      : array-like  shape (10,)
         action_idx : int         index into the DQN's template table
         reward     : float
@@ -47,7 +45,6 @@ class ReplayBuffer:
         Return a random batch as stacked numpy arrays.
 
         Returns
-        -------
         states      : np.ndarray  shape (B, 10)
         action_idxs : np.ndarray  shape (B,)  dtype int64
         rewards     : np.ndarray  shape (B,)

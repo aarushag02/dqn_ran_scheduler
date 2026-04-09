@@ -6,14 +6,12 @@ and animates PRB allocation, CQI, and per-UE throughput in real time.
 Intended for use during the project presentation.
 
 Usage
------
     python demo.py                          # uniform scenario, DQN only
-    python demo.py --scenario bursty        # bursty scenario
-    python demo.py --scenario heterogeneous --compare-baselines
-    python demo.py --no-model               # random policy (no .pt needed)
+    python demo.py - scenario bursty        # bursty scenario
+    python demo.py - scenario heterogeneous - compare-baselines
+    python demo.py - no-model               # random policy (no .pt needed)
 
 Controls
---------
     Close the window to exit early.
 """
 
@@ -33,11 +31,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from env.ran_environment import RANEnvironment
 from agent.dqn_agent     import DQNAgent
 
-
-# ------------------------------------------------------------------
 # CLI
-# ------------------------------------------------------------------
-
 def parse_args():
     p = argparse.ArgumentParser(description="Live DQN PRB scheduler demo")
     p.add_argument("--scenario", default="uniform",
@@ -53,14 +47,9 @@ def parse_args():
                    help="Milliseconds between animation frames")
     return p.parse_args()
 
-
-# ------------------------------------------------------------------
 # Baseline helpers (inline to avoid import dependency on eval/)
-# ------------------------------------------------------------------
-
 def round_robin_alloc(n_ues, total_prbs):
     return np.full(n_ues, total_prbs / n_ues, dtype=np.float32)
-
 
 def proportional_fair_alloc(state, n_ues, total_prbs):
     cqi = state[:n_ues].astype(np.float64)
@@ -68,11 +57,7 @@ def proportional_fair_alloc(state, n_ues, total_prbs):
     weights = cqi / cqi.sum()
     return (weights * total_prbs).astype(np.float32)
 
-
-# ------------------------------------------------------------------
 # Animation
-# ------------------------------------------------------------------
-
 N_UES     = 5
 TOTAL_PRB = 50
 UE_LABELS = [f"UE {i}" for i in range(N_UES)]
@@ -144,7 +129,7 @@ class LiveDemo:
         # episode state
         self.state, _ = self.env.reset()
 
-    # ---- per-frame update ----------------------------------------
+    # per-frame update
 
     def update(self, frame):
         _, action  = self.agent.act(self.state, epsilon=0.0)
@@ -160,7 +145,7 @@ class LiveDemo:
         for i in range(N_UES):
             self.cqi_hist[i].append(cqi[i])
 
-        # ── PRB allocation bar ─────────────────────────────────────
+        # PRB allocation bar
         ax = self.axes["prb"]
         ax.cla()
         ax.set_facecolor("#2a2a3e")
@@ -179,7 +164,7 @@ class LiveDemo:
         ax.legend(fontsize=7, facecolor="#2a2a3e", labelcolor="white",
                   framealpha=0.6)
 
-        # ── CQI history lines ──────────────────────────────────────
+        # CQI history lines
         ax = self.axes["cqi"]
         ax.cla()
         ax.set_facecolor("#2a2a3e")
@@ -193,7 +178,7 @@ class LiveDemo:
         ax.legend(fontsize=6, facecolor="#2a2a3e", labelcolor="white",
                   ncol=5, loc="upper right", framealpha=0.6)
 
-        # ── Reward history ─────────────────────────────────────────
+        # Reward history
         ax = self.axes["reward"]
         ax.cla()
         ax.set_facecolor("#2a2a3e")
@@ -214,7 +199,7 @@ class LiveDemo:
             ax.legend(fontsize=7, facecolor="#2a2a3e",
                       labelcolor="white", framealpha=0.6)
 
-        # ── Throughput bars ────────────────────────────────────────
+        # Throughput bars
         ax = self.axes["tput"]
         ax.cla()
         ax.set_facecolor("#2a2a3e")
@@ -228,7 +213,7 @@ class LiveDemo:
                     f"{v:.1f}", ha="center", va="bottom",
                     color="white", fontsize=7)
 
-        # ── Baseline comparison (optional) ─────────────────────────
+        # Baseline comparison (optional)
         if self.args.compare_baselines and "compare" in self.axes:
             ax = self.axes["compare"]
             ax.cla()
@@ -266,7 +251,7 @@ class LiveDemo:
             self.cqi_hist = [[] for _ in range(N_UES)]
             self.step_nums.clear()
 
-    # ---- run -------------------------------------------------------
+    # Run
 
     def run(self):
         anim = FuncAnimation(
@@ -277,11 +262,7 @@ class LiveDemo:
         )
         plt.show()
 
-
-# ------------------------------------------------------------------
 # Entry point
-# ------------------------------------------------------------------
-
 if __name__ == "__main__":
     args = parse_args()
     demo = LiveDemo(args)

@@ -81,6 +81,11 @@ class RANEnvironment(gym.Env):
     """
     Apply the agent's PRB allocation, compute throughput and reward,
     then advance CQI by one Markov step.
+    Apply hard per-UE minimum PRB floor then distribute the remainder
+    Each UE is guaranteed min_prbs_per_ue PRBs regardless of the action.
+    The action weights determine how the remaining budget is split.
+    This prevents the agent from starving any UE entirely and removes
+    the incentive to hide behind a trivial equal-split policy.
     Parameters
         action : np.ndarray  shape (5,)  raw PRB allocation from DQN
     Returns
@@ -93,12 +98,6 @@ class RANEnvironment(gym.Env):
     def step(self, action):
         
         self.step_count += 1
-
-        # 1. apply hard per-UE minimum PRB floor then distribute the remainder
-        # Each UE is guaranteed min_prbs_per_ue PRBs regardless of the action.
-        # The action weights determine how the remaining budget is split.
-        # This prevents the agent from starving any UE entirely and removes
-        # the incentive to hide behind a trivial equal-split policy.
         action = np.clip(action, 0.0, None)
         action_sum = action.sum()
         if action_sum < 1e-6:
@@ -174,7 +173,6 @@ class RANEnvironment(gym.Env):
     Advance CQI values by one time step using a scenario-specific
     Markov process. Returns updated CQI array clamped to [1, 15].
     """
-
     def _update_cqi(self):
         
         cqi = self.cqi.copy()
@@ -229,7 +227,7 @@ class RANEnvironment(gym.Env):
     Returns
         throughputs : np.ndarray  shape (n_ues,)
     """
-
+    
     def _compute_throughput(self, prbs, cqi):
         
         snr = (cqi - 1) * 2.0

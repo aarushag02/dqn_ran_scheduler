@@ -16,17 +16,13 @@ The key fix over the original continuous-output version:
 """
 
 import copy
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-# ---------------------------------------------------------------------------
 # Action template table
-# ---------------------------------------------------------------------------
-
 N_TEMPLATES = 64   # size of the discrete action space
 N_UES       = 5
 TOTAL_PRBS  = 50
@@ -44,7 +40,6 @@ def build_templates(n_templates: int = N_TEMPLATES,
     templates without needing to save them alongside model weights.
 
     Structure
-    ---------
     1  equal split
     5  single-UE heavy   (one UE gets 70 %, rest share 30 %)
     5  single-UE moderate (one UE gets 50 %, rest share 50 %)
@@ -53,22 +48,20 @@ def build_templates(n_templates: int = N_TEMPLATES,
    33  random Dirichlet  (varied concentration for exploration diversity)
 
     Parameters
-    ----------
     n_templates : total number of templates (must be >= 31)
     n_ues       : number of UEs
     total_prbs  : PRB budget
 
     Returns
-    -------
     np.ndarray  shape (n_templates, n_ues)  dtype float32
     """
     templates = []
     equal = total_prbs / n_ues
 
-    # --- 1. equal split ---------------------------------------------------
+    # 1. equal split
     templates.append(np.full(n_ues, equal, dtype=np.float32))
 
-    # --- 2. single-UE heavy: one UE gets 70 %, rest share 30 % -----------
+    # 2. single-UE heavy: one UE gets 70 %, rest share 30
     heavy = 0.70 * total_prbs
     light = (total_prbs - heavy) / (n_ues - 1)
     for i in range(n_ues):
@@ -76,7 +69,7 @@ def build_templates(n_templates: int = N_TEMPLATES,
         t[i] = heavy
         templates.append(t)
 
-    # --- 3. single-UE moderate: one UE gets 50 %, rest share 50 % --------
+    # 3. single-UE moderate: one UE gets 50 %, rest share 50
     mod = 0.50 * total_prbs
     rest_mod = (total_prbs - mod) / (n_ues - 1)
     for i in range(n_ues):
@@ -84,7 +77,7 @@ def build_templates(n_templates: int = N_TEMPLATES,
         t[i] = mod
         templates.append(t)
 
-    # --- 4. two-UE heavy: pair shares 64 %, rest share 36 % --------------
+    # 4. two-UE heavy: pair shares 64 %, rest share 36
     pair_heavy = 0.32 * total_prbs   # each of the two UEs
     rest_heavy = (total_prbs - 2 * pair_heavy) / (n_ues - 2)
     for i in range(n_ues):
@@ -94,7 +87,7 @@ def build_templates(n_templates: int = N_TEMPLATES,
             t[j] = pair_heavy
             templates.append(t)
 
-    # --- 5. two-UE moderate: pair shares 48 %, rest share 52 % -----------
+    # 5. two-UE moderate: pair shares 48 %, rest share 52
     pair_mod = 0.24 * total_prbs
     rest_pmod = (total_prbs - 2 * pair_mod) / (n_ues - 2)
     for i in range(n_ues):
@@ -104,7 +97,7 @@ def build_templates(n_templates: int = N_TEMPLATES,
             t[j] = pair_mod
             templates.append(t)
 
-    # --- 6. random Dirichlet fill -----------------------------------------
+    # 6. random Dirichlet fill
     rng = np.random.default_rng(seed)
     while len(templates) < n_templates:
         # mix of spiky (low alpha) and spread (high alpha) distributions
@@ -119,10 +112,7 @@ def build_templates(n_templates: int = N_TEMPLATES,
     return arr
 
 
-# ---------------------------------------------------------------------------
 # Q-network
-# ---------------------------------------------------------------------------
-
 class DQNNetwork(nn.Module):
     """
     Feed-forward Q-network mapping observations → Q-values over templates.
@@ -149,22 +139,17 @@ class DQNNetwork(nn.Module):
         return self.net(x)
 
 
-# ---------------------------------------------------------------------------
 # Agent
-# ---------------------------------------------------------------------------
-
 class DQNAgent:
     """
     Double DQN agent for discrete PRB template selection.
 
     Action space
-    ------------
     The agent maintains a table of N_TEMPLATES fixed PRB allocation
     vectors (see build_templates). At each step it selects an index
     and passes the corresponding vector to the environment.
 
     Learning
-    --------
     Standard Double DQN (van Hasselt et al. 2016):
       - Online net selects the greedy next-action
       - Target net evaluates that action's Q-value
@@ -172,7 +157,6 @@ class DQNAgent:
         (implemented via torch.gather — not broadcast across all outputs)
 
     Parameters
-    ----------
     n_templates  : number of discrete allocation templates
     state_dim    : observation size (default 10)
     hidden_dim   : hidden layer width (default 256)
@@ -216,22 +200,18 @@ class DQNAgent:
 
         self.optimizer = optim.Adam(self.online.parameters(), lr=lr)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
+    # Public API
     def act(self, state: np.ndarray,
             epsilon: float = 0.0) -> tuple[int, np.ndarray]:
         """
         ε-greedy template selection.
 
         Parameters
-        ----------
         state   : np.ndarray  shape (10,)
         epsilon : float       exploration probability
 
         Returns
-        -------
         action_idx : int         chosen template index
         prb_alloc  : np.ndarray  shape (5,)  the corresponding PRB vector
         """
@@ -250,12 +230,10 @@ class DQNAgent:
         One Double-DQN gradient step.
 
         Parameters
-        ----------
         batch : (states, action_idxs, rewards, next_states, dones)
                 action_idxs is np.ndarray of dtype int64
 
         Returns
-        -------
         loss : float
         """
         states, action_idxs, rewards, next_states, dones = batch
