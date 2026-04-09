@@ -24,7 +24,8 @@ class RANEnvironment(gym.Env):
     metadata = {"render_modes": []}
 
     def __init__(self, n_ues=5, total_prbs=50, scenario="uniform",
-                 max_steps=200, min_throughput_floor=2.0):
+                 max_steps=200, min_throughput_floor=2.0,
+                 min_prbs_per_ue=2):
         super().__init__()
 
         # core parameters
@@ -32,6 +33,7 @@ class RANEnvironment(gym.Env):
         self.total_prbs = total_prbs
         self.scenario = scenario
         self.max_steps = max_steps
+        self.min_prbs_per_ue = min_prbs_per_ue  # hard floor per UE
 
         # any UE falling below this throughput per step incurs a penalty
         self.min_throughput_floor = min_throughput_floor
@@ -92,17 +94,21 @@ class RANEnvironment(gym.Env):
         
         self.step_count += 1
 
-        # 1. normalise action so PRBs sum exactly to total_prbs
-        # The DQN output can be any positive numbers. We treat them as
-        # weights and scale them. This guarantees the PRB budget is always
-        # respected without requiring the DQN to learn that constraint.
-        action = np.clip(action, 0.0, None)          # no negative PRBs
+        # 1. apply hard per-UE minimum PRB floor then distribute the remainder
+        # Each UE is guaranteed min_prbs_per_ue PRBs regardless of the action.
+        # The action weights determine how the remaining budget is split.
+        # This prevents the agent from starving any UE entirely and removes
+        # the incentive to hide behind a trivial equal-split policy.
+        action = np.clip(action, 0.0, None)
         action_sum = action.sum()
         if action_sum < 1e-6:
-            # safety: if agent outputs all zeros, fall back to equal split
             action = np.ones(self.n_ues, dtype=np.float32)
             action_sum = float(self.n_ues)
-        self.prb_alloc = (action / action_sum) * self.total_prbs
+
+        reserved  = self.min_prbs_per_ue * self.n_ues          # e.g. 10
+        remaining = self.total_prbs - reserved                  # e.g. 40
+        weights   = action / action_sum
+        self.prb_alloc = (self.min_prbs_per_ue + weights * remaining).astype(np.float32)
 
         # 2. compute per-UE throughput 
         throughputs = self._compute_throughput(self.prb_alloc, self.cqi)
@@ -246,9 +252,12 @@ class RANEnvironment(gym.Env):
         
         total_throughput = throughputs.sum()
 
-        # identify UEs below the minimum throughput floor
+        # soft fairness penalty: 1× shortfall (reduced from 5× so the agent
+        # isn't pushed into trivially equal allocation to avoid all penalty)
         shortfalls = np.maximum(0.0, self.min_throughput_floor - throughputs)
-        fairness_penalty = 5.0 * shortfalls.sum()
+        fairness_penalty = 1.0 * shortfalls.sum()
 
-        reward = total_throughput - fairness_penalty
+        # normalise by total_prbs so rewards stay in a ~3–5 range per step
+        # rather than ~150–200, which destabilises Q-value estimates
+        reward = (total_throughput - fairness_penalty) / self.total_prbs
         return reward
