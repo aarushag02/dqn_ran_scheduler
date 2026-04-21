@@ -282,7 +282,7 @@ class DQNAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.online.parameters(), max_norm=10.0)
+        nn.utils.clip_grad_norm_(self.online.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         self._learn_steps += 1

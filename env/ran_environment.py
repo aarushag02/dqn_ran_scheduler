@@ -39,12 +39,14 @@ class RANEnvironment(gym.Env):
         self.min_throughput_floor = min_throughput_floor
 
         # gymnasium spaces
-        # State: [cqi_0..cqi_4, prb_0..prb_4]  →  10 floats
-        # CQI range 1–15, PRB range 0–total_prbs
-        low  = np.array([1.0]  * n_ues + [0.0]          * n_ues, dtype=np.float32)
-        high = np.array([15.0] * n_ues + [total_prbs]   * n_ues, dtype=np.float32)
-        self.observation_space = spaces.Box(low=low, high=high,
-                                            dtype=np.float32)
+        # Observation is sorted by CQI rank (descending) and normalised to [0, 1].
+        # rank-0 = highest-CQI UE, rank-4 = lowest.  Both CQI and PRB components
+        # live in [0, 1] so the network sees a consistent input scale.
+        self.observation_space = spaces.Box(
+            low=np.zeros(2 * n_ues, dtype=np.float32),
+            high=np.ones(2 * n_ues, dtype=np.float32),
+            dtype=np.float32,
+        )
 
         # Action: continuous PRB allocation per UE
         # Values are non-negative; environment normalises them to sum to total_prbs
@@ -52,9 +54,11 @@ class RANEnvironment(gym.Env):
                                        shape=(n_ues,), dtype=np.float32)
 
         # internal state (initialised properly in reset())
-        self.cqi      = np.zeros(n_ues, dtype=np.float32)
+        self.cqi       = np.zeros(n_ues, dtype=np.float32)
         self.prb_alloc = np.zeros(n_ues, dtype=np.float32)
         self.step_count = 0
+        # permutation that maps CQI-rank order → physical UE order (set by _get_obs)
+        self._sort_idx = np.arange(n_ues)
 
     
     # PUBLIC API — called by the DQN training loop
@@ -67,7 +71,7 @@ class RANEnvironment(gym.Env):
     """
 
     def reset(self, seed=None, options=None):
-        
+
         super().reset(seed=seed)
 
         self.cqi       = self._init_cqi()
@@ -75,6 +79,7 @@ class RANEnvironment(gym.Env):
                                  self.total_prbs / self.n_ues,
                                  dtype=np.float32)
         self.step_count = 0
+        self._sort_idx = np.arange(self.n_ues)  # reset before first _get_obs call
 
         return self._get_obs(), {}
 
@@ -91,10 +96,15 @@ class RANEnvironment(gym.Env):
         info        : dict   per-UE throughput for logging
     """
     def step(self, action):
-        
+
         self.step_count += 1
 
-        # 1. apply hard per-UE minimum PRB floor then distribute the remainder
+        # 1. Unsort the action: the agent sees UEs sorted by CQI rank, so we
+        #    must map its allocation back to physical UE indices before applying.
+        unsort_idx = np.argsort(self._sort_idx)
+        action = np.asarray(action, dtype=np.float32)[unsort_idx]
+
+        # 2. apply hard per-UE minimum PRB floor then distribute the remainder
         # Each UE is guaranteed min_prbs_per_ue PRBs regardless of the action.
         # The action weights determine how the remaining budget is split.
         # This prevents the agent from starving any UE entirely and removes
@@ -110,16 +120,16 @@ class RANEnvironment(gym.Env):
         weights   = action / action_sum
         self.prb_alloc = (self.min_prbs_per_ue + weights * remaining).astype(np.float32)
 
-        # 2. compute per-UE throughput 
+        # 3. compute per-UE throughput
         throughputs = self._compute_throughput(self.prb_alloc, self.cqi)
 
-        # 3. compute reward 
+        # 4. compute reward
         reward = self._compute_reward(throughputs)
 
-        # 4. advance CQI (Markov step)
+        # 5. advance CQI (Markov step)
         self.cqi = self._update_cqi()
 
-        # 5. check termination 
+        # 6. check termination
         terminated = self.step_count >= self.max_steps
         truncated  = False
 
@@ -131,10 +141,24 @@ class RANEnvironment(gym.Env):
     # PRIVATE HELPERS
     def _get_obs(self):
         """
-        Pack CQI and PRB allocation into a single flat state vector.
-        Shape: (10,) — first 5 are CQI values, last 5 are PRB allocations.
+        Return a normalised, CQI-rank-sorted observation.
+
+        UEs are sorted by descending CQI so that position 0 always refers to
+        the UE with the best channel and position 4 to the worst.  This means
+        the DQN only needs to learn one canonical allocation pattern
+        ("give more PRBs to rank-0") rather than 5! physical-UE permutations.
+
+        Both components are normalised to [0, 1]:
+            CQI  : (raw - 1) / 14   maps [1, 15] → [0, 1]
+            PRB  : raw / total_prbs maps [0, 50] → [0, 1]
+
+        The sort permutation is stored in self._sort_idx so that step() can
+        invert it when the agent's next action arrives.
         """
-        return np.concatenate([self.cqi, self.prb_alloc]).astype(np.float32)
+        self._sort_idx = np.argsort(self.cqi)[::-1].copy()   # descending CQI rank
+        cqi_sorted = (self.cqi[self._sort_idx] - 1.0) / 14.0
+        prb_sorted = self.prb_alloc[self._sort_idx] / self.total_prbs
+        return np.concatenate([cqi_sorted, prb_sorted]).astype(np.float32)
 
     #CQI initialisation
     def _init_cqi(self):
