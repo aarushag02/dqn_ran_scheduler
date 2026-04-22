@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from env.ran_environment import RANEnvironment
 from agent.dqn_agent     import DQNAgent
-from agent.replay_buffer import ReplayBuffer
+from agent.replay_buffer import ReplayBuffer, NStepBuffer
 
 
 # ------------------------------------------------------------------
@@ -26,17 +26,18 @@ from agent.replay_buffer import ReplayBuffer
 # ------------------------------------------------------------------
 DEFAULTS = dict(
     scenario    = "uniform",
-    total_steps = 50_000,
+    total_steps = 100_000,
     batch_size  = 64,
     buffer_cap  = 50_000,
     lr          = 1e-4,
     gamma       = 0.95,
     eps_start   = 1.0,
     eps_end     = 0.05,
-    eps_decay   = 0.9997,   # reaches 0.05 at ~14 k steps; explores well into training
+    eps_decay   = 0.9997,
     target_upd  = 200,
-    warmup      = 500,      # fill buffer before first gradient step
-    log_every   = 500,
+    warmup      = 1_000,
+    n_step      = 3,
+    log_every   = 1_000,
     model_dir   = "models",
 )
 
@@ -56,10 +57,12 @@ def parse_args():
 def train(cfg):
     os.makedirs(cfg.model_dir, exist_ok=True)
 
-    env    = RANEnvironment(scenario=cfg.scenario)
-    agent  = DQNAgent(lr=cfg.lr, gamma=cfg.gamma,
-                      target_update=DEFAULTS["target_upd"])
-    buffer = ReplayBuffer(capacity=DEFAULTS["buffer_cap"])
+    env       = RANEnvironment(scenario=cfg.scenario)
+    agent     = DQNAgent(lr=cfg.lr, gamma=cfg.gamma,
+                         target_update=DEFAULTS["target_upd"],
+                         n_step=DEFAULTS["n_step"])
+    buffer    = ReplayBuffer(capacity=DEFAULTS["buffer_cap"])
+    nstep_buf = NStepBuffer(n=DEFAULTS["n_step"], gamma=cfg.gamma)
 
     epsilon     = DEFAULTS["eps_start"]
     total_steps = 0
@@ -70,20 +73,20 @@ def train(cfg):
     state, _ = env.reset()
 
     print(f"Training DQN | scenario={cfg.scenario} | "
-          f"total_steps={cfg.total_steps} | "
+          f"total_steps={cfg.total_steps} | n_step={DEFAULTS['n_step']} | "
           f"n_templates={agent.n_templates} | device={agent.device}")
     print("-" * 65)
 
     while total_steps < cfg.total_steps:
 
-        # ε-greedy: act() returns (index, prb_allocation_vector)
         action_idx, prb_alloc = agent.act(state, epsilon)
-
         next_state, reward, terminated, truncated, info = env.step(prb_alloc)
         done = terminated or truncated
 
-        # store the INTEGER index, not the allocation vector
-        buffer.push(state, action_idx, reward, next_state, done)
+        # accumulate n-step return; push to replay when ready
+        t = nstep_buf.push(state, action_idx, reward, next_state, done)
+        if t is not None:
+            buffer.push(*t)
 
         ep_reward  += reward
         total_steps += 1
@@ -104,6 +107,9 @@ def train(cfg):
                   f"avg_reward {avg_r:>7.3f} | loss {avg_l:.4f}")
 
         if done:
+            for t in nstep_buf.flush():
+                buffer.push(*t)
+            nstep_buf.clear()
             state, _ = env.reset()
             ep_reward = 0.0
         else:
