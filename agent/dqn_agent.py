@@ -115,28 +115,50 @@ def build_templates(n_templates: int = N_TEMPLATES,
 # Q-network
 class DQNNetwork(nn.Module):
     """
-    Feed-forward Q-network mapping observations → Q-values over templates.
+    Dueling Q-network: shared backbone → separate value V(s) and
+    advantage A(s,a) streams.
 
-    Architecture: 10 → 256 → ReLU → 256 → ReLU → N_TEMPLATES
+        Q(s,a) = V(s) + A(s,a) − mean_a(A(s,a))
 
-    Output is a linear layer (no activation): Q-values may be negative,
-    and we must not bias them positive via Softplus or similar.
+    Separating value from advantage lets the network learn which states
+    are inherently good independently of which action was taken.  This
+    stabilises Q-value estimates and speeds up convergence, especially
+    when many actions have similar Q-values (common early in training).
+
+    Architecture
+    ------------
+    backbone  : state_dim → hidden → hidden   (ReLU)
+    value     : hidden → hidden//2 → 1
+    advantage : hidden → hidden//2 → n_actions
     """
 
     def __init__(self, state_dim: int = 10,
                  n_actions: int = N_TEMPLATES,
                  hidden_dim: int = 256):
         super().__init__()
-        self.net = nn.Sequential(
+        adv_hid = hidden_dim // 2
+        self.backbone = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, n_actions),
+        )
+        self.value = nn.Sequential(
+            nn.Linear(hidden_dim, adv_hid),
+            nn.ReLU(),
+            nn.Linear(adv_hid, 1),
+        )
+        self.advantage = nn.Sequential(
+            nn.Linear(hidden_dim, adv_hid),
+            nn.ReLU(),
+            nn.Linear(adv_hid, n_actions),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        f = self.backbone(x)
+        v = self.value(f)
+        a = self.advantage(f)
+        return v + a - a.mean(dim=1, keepdim=True)
 
 
 # Agent
@@ -174,6 +196,7 @@ class DQNAgent:
         lr:            float = 5e-4,
         gamma:         float = 0.99,
         target_update: int   = 500,
+        n_step:        int   = 1,
         device:        str   = None,
     ):
         if device is None:
@@ -186,6 +209,7 @@ class DQNAgent:
 
         self.device        = torch.device(device)
         self.gamma         = gamma
+        self.gamma_n       = gamma ** n_step   # used in n-step Bellman target
         self.target_update = target_update
         self.n_templates   = n_templates
         self._learn_steps  = 0
@@ -254,13 +278,13 @@ class DQNAgent:
         with torch.no_grad():
             next_actions = self.online(next_states_t).argmax(dim=1, keepdim=True)  # (B,1)
             next_q       = self.target(next_states_t).gather(1, next_actions).squeeze(1)  # (B,)
-            targets      = rewards_t + self.gamma * next_q * (1.0 - dones_t)
+            targets      = rewards_t + self.gamma_n * next_q * (1.0 - dones_t)
 
         loss = F.huber_loss(q_chosen, targets)
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.online.parameters(), max_norm=10.0)
+        nn.utils.clip_grad_norm_(self.online.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         self._learn_steps += 1
