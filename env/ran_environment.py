@@ -260,28 +260,21 @@ class RANEnvironment(gym.Env):
         throughputs = prbs * np.log2(1.0 + snr)
         return throughputs
 
-    # Reward 
+    # Reward
     """
-    Reward = total throughput across all UEs
-            minus a penalty for each UE below the minimum floor.
+    Proportional Fair (PF) utility: reward = mean_i( log(1 + throughput_i) )
 
-    The fairness penalty discourages the DQN from maximising total
-    throughput by starving weak UEs — a behaviour that would score
-    well on throughput but produce a poor Jain's fairness index.
+    Maximising sum-of-logs is the textbook definition of proportional
+    fairness in resource allocation.  The log gives diminishing returns
+    to UEs that already have high throughput and penalises starvation
+    sharply (log → -∞ as throughput → 0), so the agent naturally learns
+    to spread PRBs more evenly without a hand-tuned penalty weight.
 
-    Penalty per starved UE = 5.0 * shortfall below the floor.
+    Dividing by n_ues keeps rewards in the same ~3–5 range as before so
+    Q-value estimates remain numerically stable.
     """
 
     def _compute_reward(self, throughputs):
-        
-        total_throughput = throughputs.sum()
-
-        # soft fairness penalty: 1× shortfall (reduced from 5× so the agent
-        # isn't pushed into trivially equal allocation to avoid all penalty)
-        shortfalls = np.maximum(0.0, self.min_throughput_floor - throughputs)
-        fairness_penalty = 1.0 * shortfalls.sum()
-
-        # normalise by total_prbs so rewards stay in a ~3–5 range per step
-        # rather than ~150–200, which destabilises Q-value estimates
-        reward = (total_throughput - fairness_penalty) / self.total_prbs
+        # proportional fair utility — no manual penalty weight needed
+        reward = np.sum(np.log1p(throughputs)) / self.n_ues
         return reward

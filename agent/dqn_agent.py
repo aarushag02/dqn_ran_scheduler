@@ -61,16 +61,18 @@ def build_templates(n_templates: int = N_TEMPLATES,
     # 1. equal split
     templates.append(np.full(n_ues, equal, dtype=np.float32))
 
-    # 2. single-UE heavy: one UE gets 70 %, rest share 30
-    heavy = 0.70 * total_prbs
+    # 2. single-UE heavy: one UE gets 40 %, rest share 60
+    # (reduced from 70 % — extreme dominance conflicts with PF reward)
+    heavy = 0.40 * total_prbs
     light = (total_prbs - heavy) / (n_ues - 1)
     for i in range(n_ues):
         t = np.full(n_ues, light, dtype=np.float32)
         t[i] = heavy
         templates.append(t)
 
-    # 3. single-UE moderate: one UE gets 50 %, rest share 50
-    mod = 0.50 * total_prbs
+    # 3. single-UE moderate: one UE gets 30 %, rest share 70
+    # (reduced from 50 % to keep a clean equal < moderate < heavy progression)
+    mod = 0.30 * total_prbs
     rest_mod = (total_prbs - mod) / (n_ues - 1)
     for i in range(n_ues):
         t = np.full(n_ues, rest_mod, dtype=np.float32)
