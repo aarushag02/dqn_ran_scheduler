@@ -46,6 +46,107 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
+class PrioritizedReplayBuffer:
+    """
+    Prioritized Experience Replay (PER) buffer — Schaul et al. 2016.
+
+    Experiences are sampled proportional to their TD-error priority so
+    that rare, high-surprise transitions (e.g. successfully helping a
+    starved UE) are replayed more often than routine near-equal steps.
+
+    Priority for a new experience is initialised to max(existing) so it
+    is guaranteed to be sampled at least once before being deprioritised.
+
+    Importance-sampling (IS) weights correct for the introduced sampling
+    bias; β is annealed from β_start → 1.0 over the course of training.
+
+    Parameters
+    ----------
+    capacity  : int    maximum number of stored experiences
+    alpha     : float  priority exponent  (0 = uniform, 1 = full priority)
+    beta_start: float  initial IS-weight exponent
+    beta_steps: int    steps over which β is annealed to 1.0
+    """
+
+    def __init__(self, capacity: int = 50_000,
+                 alpha: float = 0.6,
+                 beta_start: float = 0.4,
+                 beta_steps: int = 100_000):
+        self.capacity   = capacity
+        self.alpha      = alpha
+        self.beta_start = beta_start
+        self.beta_steps = beta_steps
+        self._step      = 0
+
+        self.buffer     = []
+        self.priorities = np.zeros(capacity, dtype=np.float32)
+        self._pos       = 0   # circular write pointer
+
+    # ── Sum-tree helpers ──────────────────────────────────────────────────────
+
+    def _max_priority(self) -> float:
+        if len(self.buffer) == 0:
+            return 1.0
+        return float(self.priorities[:len(self.buffer)].max())
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def push(self, state, action_idx: int, reward: float,
+             next_state, done: bool):
+        # capture max priority before mutating buffer to avoid reading own zero
+        max_p = self._max_priority()
+        experience = (
+            np.array(state,      dtype=np.float32),
+            int(action_idx),
+            float(reward),
+            np.array(next_state, dtype=np.float32),
+            bool(done),
+        )
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer[self._pos] = experience
+
+        # new transitions get max priority so they're sampled at least once
+        self.priorities[self._pos] = max_p
+        self._pos = (self._pos + 1) % self.capacity
+
+    def sample(self, batch_size: int):
+        n = len(self.buffer)
+        probs = self.priorities[:n] ** self.alpha
+        probs /= probs.sum()
+
+        indices = np.random.choice(n, batch_size, replace=False, p=probs)
+
+        # IS weights: w_i = (1 / N·P(i))^β  normalised by max weight
+        beta = min(1.0, self.beta_start +
+                   self._step * (1.0 - self.beta_start) / self.beta_steps)
+        self._step += 1
+
+        weights = (n * probs[indices]) ** (-beta)
+        weights /= weights.max()
+
+        batch = [self.buffer[i] for i in indices]
+        states, action_idxs, rewards, next_states, dones = zip(*batch)
+        return (
+            np.stack(states),
+            np.array(action_idxs, dtype=np.int64),
+            np.array(rewards,     dtype=np.float32),
+            np.stack(next_states),
+            np.array(dones,       dtype=np.float32),
+            weights.astype(np.float32),
+            indices,
+        )
+
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray):
+        """Call after each learning step with |TD error| for sampled transitions."""
+        for idx, err in zip(indices, td_errors):
+            self.priorities[idx] = float(abs(err)) + 1e-6   # small ε prevents zero
+
+    def __len__(self):
+        return len(self.buffer)
+
+
 class NStepBuffer:
     """
     Accumulates n consecutive transitions and emits a single

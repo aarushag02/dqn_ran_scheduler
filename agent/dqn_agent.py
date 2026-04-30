@@ -134,7 +134,7 @@ class DQNNetwork(nn.Module):
     advantage : hidden → hidden//2 → n_actions
     """
 
-    def __init__(self, state_dim: int = 10,
+    def __init__(self, state_dim: int = 15,
                  n_actions: int = N_TEMPLATES,
                  hidden_dim: int = 256):
         super().__init__()
@@ -193,7 +193,7 @@ class DQNAgent:
     def __init__(
         self,
         n_templates:   int   = N_TEMPLATES,
-        state_dim:     int   = 10,
+        state_dim:     int   = 15,
         hidden_dim:    int   = 256,
         lr:            float = 5e-4,
         gamma:         float = 0.99,
@@ -234,7 +234,7 @@ class DQNAgent:
         ε-greedy template selection.
 
         Parameters
-        state   : np.ndarray  shape (10,)
+        state   : np.ndarray  shape (15,)
         epsilon : float       exploration probability
 
         Returns
@@ -253,16 +253,23 @@ class DQNAgent:
 
     def learn(self, batch: tuple) -> float:
         """
-        One Double-DQN gradient step.
+        One Double-DQN gradient step. Supports both uniform and PER batches.
 
         Parameters
-        batch : (states, action_idxs, rewards, next_states, dones)
-                action_idxs is np.ndarray of dtype int64
+        batch : tuple from ReplayBuffer.sample()  — 5 elements (uniform)
+                      or PrioritizedReplayBuffer.sample() — 7 elements (PER)
+                      PER adds IS weights and sample indices at positions 5, 6.
 
         Returns
-        loss : float
+        loss      : float
+        td_errors : np.ndarray  shape (B,)  — |TD error| per sample for PER update
         """
-        states, action_idxs, rewards, next_states, dones = batch
+        if len(batch) == 7:
+            states, action_idxs, rewards, next_states, dones, is_weights, _ = batch
+            is_weights_t = torch.tensor(is_weights, dtype=torch.float32, device=self.device)
+        else:
+            states, action_idxs, rewards, next_states, dones = batch
+            is_weights_t = None
 
         states_t      = torch.tensor(states,      dtype=torch.float32, device=self.device)
         action_idxs_t = torch.tensor(action_idxs, dtype=torch.int64,   device=self.device)
@@ -282,7 +289,14 @@ class DQNAgent:
             next_q       = self.target(next_states_t).gather(1, next_actions).squeeze(1)  # (B,)
             targets      = rewards_t + self.gamma_n * next_q * (1.0 - dones_t)
 
-        loss = F.huber_loss(q_chosen, targets)
+        td_errors = (q_chosen - targets).detach()
+
+        # IS-weighted loss for PER; plain Huber for uniform replay
+        if is_weights_t is not None:
+            element_loss = F.huber_loss(q_chosen, targets, reduction='none')
+            loss = (is_weights_t * element_loss).mean()
+        else:
+            loss = F.huber_loss(q_chosen, targets)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -293,7 +307,7 @@ class DQNAgent:
         if self._learn_steps % self.target_update == 0:
             self.target.load_state_dict(self.online.state_dict())
 
-        return float(loss.item())
+        return float(loss.item()), td_errors.cpu().numpy()
 
     def save(self, path: str):
         torch.save(self.online.state_dict(), path)

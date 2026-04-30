@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from env.ran_environment import RANEnvironment
 from agent.dqn_agent     import DQNAgent
-from agent.replay_buffer import ReplayBuffer, NStepBuffer
+from agent.replay_buffer import PrioritizedReplayBuffer, NStepBuffer
 
 
 # ------------------------------------------------------------------
@@ -36,7 +36,7 @@ DEFAULTS = dict(
     eps_decay   = 0.9997,
     target_upd  = 200,
     warmup      = 1_000,
-    n_step      = 3,
+    n_step      = 5,
     log_every   = 1_000,
     model_dir   = "models",
 )
@@ -61,7 +61,8 @@ def train(cfg):
     agent     = DQNAgent(lr=cfg.lr, gamma=cfg.gamma,
                          target_update=DEFAULTS["target_upd"],
                          n_step=DEFAULTS["n_step"])
-    buffer    = ReplayBuffer(capacity=DEFAULTS["buffer_cap"])
+    buffer    = PrioritizedReplayBuffer(capacity=DEFAULTS["buffer_cap"],
+                                        beta_steps=cfg.total_steps)
     nstep_buf = NStepBuffer(n=DEFAULTS["n_step"], gamma=cfg.gamma)
 
     epsilon     = DEFAULTS["eps_start"]
@@ -93,8 +94,9 @@ def train(cfg):
         epsilon = max(DEFAULTS["eps_end"], epsilon * DEFAULTS["eps_decay"])
 
         if total_steps >= DEFAULTS["warmup"] and len(buffer) >= cfg.batch_size:
-            batch = buffer.sample(cfg.batch_size)
-            loss  = agent.learn(batch)
+            batch              = buffer.sample(cfg.batch_size)
+            loss, td_errors    = agent.learn(batch)
+            buffer.update_priorities(batch[6], td_errors)
             recent_losses.append(loss)
 
         recent_rewards.append(reward)
