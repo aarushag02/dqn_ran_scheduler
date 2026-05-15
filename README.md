@@ -254,11 +254,3 @@ the introduced bias; β is annealed from 0.4 → 1.0 over training.
 **`NStepBuffer`** — accumulates n=5 consecutive transitions and emits a single
 (s₀, a₀, G₅, s₅, done) tuple where G₅ is the 5-step discounted return. Handles
 episode boundaries correctly.
-
-## Team
-
-| Member | Deliverable |
-|---|---|
-| Aarush Agarwal | `env/ran_environment.py` |
-| Arka Khorchidian | `agent/dqn_agent.py`, `agent/replay_buffer.py`, `train.py`, `train_sb3.py`, `eval_and_plot.py`, `eval_comparison.py`, `sweep_alpha.py`, `demo.py` |
-| Keerthilakshmi Sivakumar | `eval/baselines.py`, `eval/metrics.py`, `notebooks/results.ipynb`, `notebooks/comparison.ipynb` |
